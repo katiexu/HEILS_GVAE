@@ -37,8 +37,8 @@ def display(metrics):
 def train(model, data_loader, optimizer, criterion, args):
     model.train()
     for feed_dict in data_loader:
-        images = feed_dict['image'].to(args.device)
-        targets = feed_dict['digit'].to(args.device)    
+        images = feed_dict['image'].cuda()  # Force GPU
+        targets = feed_dict['digit'].cuda()  # Force GPU
         optimizer.zero_grad()
         output = model(images, args.n_qubits, args.task)
         loss = criterion(output, targets)        
@@ -48,12 +48,12 @@ def train(model, data_loader, optimizer, criterion, args):
 def test(model, data_loader, criterion, args):
     model.eval()
     total_loss = 0
-    target_all = torch.Tensor().to(args.device)
-    output_all = torch.Tensor().to(args.device)
+    target_all = torch.Tensor().cuda()  # Force GPU
+    output_all = torch.Tensor().cuda()  # Force GPU
     with torch.no_grad():
         for feed_dict in data_loader:
-            images = feed_dict['image'].to(args.device)
-            targets = feed_dict['digit'].to(args.device)        
+            images = feed_dict['image'].cuda()  # Force GPU
+            targets = feed_dict['digit'].cuda()  # Force GPU
             output = model(images, args.n_qubits, args.task)
             instant_loss = criterion(output, targets).item()
             total_loss += instant_loss
@@ -75,8 +75,8 @@ def evaluate(model, data_loader, args):
     
     with torch.no_grad():
         for feed_dict in data_loader:
-            images = feed_dict['image'].to(args.device)
-            targets = feed_dict['digit'].to(args.device)        
+            images = feed_dict['image'].cuda()  # Force GPU
+            targets = feed_dict['digit'].cuda()  # Force GPU
             output = model(images, args.n_qubits, args.task)
 
     _, indices = output.topk(1, dim=1)
@@ -98,8 +98,8 @@ def Scheme_eval(design, task, weight):
         dataloader = MNISTDataLoaders(args, task['task'])
    
     train_loader, val_loader, test_loader = dataloader
-    model = QNet(args, design).to(args.device)
-    model.load_state_dict(torch.load(path+weight), strict= False)
+    model = QNet(args, design).cuda()  # Force GPU
+    model.load_state_dict(torch.load(path+weight, map_location='cuda'), strict= False)  # Force GPU
     result['mae'] = evaluate(model, test_loader, args)
     return model, result
 
@@ -108,7 +108,7 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
-    torch.manual_seed(seed)
+    # Force CUDA seed
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
@@ -122,18 +122,20 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
         dataloader = MNISTDataLoaders(args, task['task'])
    
     train_loader, val_loader, test_loader = dataloader
-    model = QNet(args, design).to(args.device)
+    model = QNet(args, design).cuda()  # Force GPU
     if weight != 'init':
         if weight != 'base':
             model.load_state_dict(weight, strict= False)
         else:            
-            model.load_state_dict(torch.load('init_weights/base_fashion'))
-    criterion = nn.NLLLoss()
+            model.load_state_dict(torch.load('init_weights/base_fashion', map_location='cuda'))  # Force GPU
+    criterion = nn.NLLLoss().cuda()  # Force GPU
     optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
     train_loss_list, val_loss_list = [], []
     best_val_loss = 0
     start = time.time()
     best_model = model
+    
+    print("Force using GPU for training and inference")
     if epochs == 0:
         print('No training epochs specified, skipping training.')        
     else:        
@@ -174,7 +176,7 @@ def pretrain(design, task, weight):
     else:
         dataloader = MNISTDataLoaders(args, task['task'])   
     train_loader, val_loader, test_loader = dataloader
-    model = QNet(args, design).to(args.device)
+    model = QNet(args, design).cuda()  # Force GPU
     model.load_state_dict(weight, strict= True)
     
     val_loss = evaluate(model, val_loader, args)
@@ -225,7 +227,7 @@ if __name__ == '__main__':
     # design = op_list_to_design(op_list, arch_code)
     design = single_enta_to_design(single, enta, arch_code, args.fold)
 
-    best_model, report = Scheme(design, task, 'init', 10, verbs=False, save=True)
+    best_model, report = Scheme(design, task, 'init', 30, verbs=False, save=True)
     
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')

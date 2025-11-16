@@ -9,14 +9,12 @@ from sklearn.metrics import accuracy_score
 from Network import FCN, FC
 from FusionModel import cir_to_matrix
 import time
-
 from GVAE_translator import generate_circuits, get_gate_and_adj_matrix
 from GVAE_model import GVAE, preprocessing
 from configs import configs
 from prepare import get_list_dimensions
 
 # torch.cuda.is_available = lambda : False
-
 
 def get_label(energy, tree_height, mean = None):
     # label = energy.clone()
@@ -82,11 +80,13 @@ class Classifier:
         self.node_layer       = ceil(log2(node_id + 2) - 1)
         self.tree_height      = tree_height
         self.fold             = fold
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # self.model            = Linear(self.input_dim_2d, 2)
-        # self.model            = Mlp(self.input_dim_2d, 6, 2)        
-        self.model            = FCN(arch_code)
+        # self.model            = Mlp(self.input_dim_2d, 6, 2)
         # self.model            = FC(arch_code)
-        
+        self.model            = FCN(arch_code).to(self.device)        
+                
         self.loss_fn          = nn.CrossEntropyLoss() #nn.MSELoss()
         self.l_rate           = 0.001
         self.optimizer        = optim.Adam(self.model.parameters(), lr=self.l_rate, betas=(0.9, 0.999), eps=1e-08)
@@ -98,8 +98,7 @@ class Classifier:
         self.labels           = None
         self.mean             = 0        
         self.period           = 10
-
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
         
         if int(arch_code[0]//self.fold) == 4:
             checkpoint = torch.load('pretrained/model-circuits_4_qubits-19.pt', map_location=self.device, weights_only=True)
@@ -149,18 +148,9 @@ class Classifier:
         labels = self.labels
         n_heads = self.tree_height - 1
         train_data = TensorDataset(nets, labels)
-        train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-        initialize_model_parameters(self.model)
-        if torch.cuda.is_available():
-            self.model.cuda()
+        train_loader = DataLoader(train_data, batch_size=64, shuffle=True)        
+        initialize_model_parameters(self.model)      
         
-        # for param in self.model.parameters():
-        #     param.requires_grad = True
-        # for param in [self.model.cls1.weight, self.model.cls1.bias,
-        #               self.model.cls2.weight, self.model.cls2.bias,
-        #               self.model.cls3.weight, self.model.cls3.bias]:
-        #     param.requires_grad = True
-                    
         for epoch in range(self.epochs):
             for x, y in train_loader:                
                 # clear grads

@@ -155,31 +155,41 @@ def reshape_to_target(tensor):
     # 情况3：其他情况使用1D池化
     pool = nn.AdaptiveAvgPool1d(16)
     return pool(tensor)
-def create_dataloader(args,train,test):
+def create_dataloader(args,train,val,test):
     train_data = reshape_to_target(torch.from_numpy(train.iloc[:, :-1].values.astype(np.float32)).unsqueeze(1))
     train_labels = torch.from_numpy(train.iloc[:, -1].values.astype(np.int64))
+    val_data = reshape_to_target(torch.from_numpy(val.iloc[:, :-1].values.astype(np.float32)).unsqueeze(1))
+    val_labels = torch.from_numpy(val.iloc[:, -1].values.astype(np.int64))
     test_data = reshape_to_target(torch.from_numpy(test.iloc[:, :-1].values.astype(np.float32)).unsqueeze(1))
     test_labels = torch.from_numpy(test.iloc[:, -1].values.astype(np.int64))
     train_labels =torch.where(train_labels == -1, torch.tensor(0), train_labels)
+    val_labels =torch.where(val_labels == -1, torch.tensor(0), val_labels)
     test_labels = torch.where(test_labels == -1, torch.tensor(0),test_labels)
     train_dateset = MyDataset(train_data, train_labels)
+    val_dateset = MyDataset(val_data, val_labels)
     test_dateset = MyDataset(test_data, test_labels)
     train_loader = torch.utils.data.DataLoader(
         train_dateset,
         batch_size=args.batch_size,
         sampler=RandomSampler(train_dateset)
     )
+    val_loader = torch.utils.data.DataLoader(
+        val_dateset,
+        batch_size=len(val_dateset),
+        # sampler=RandomSampler(val_dateset)
+    )
     test_loader = torch.utils.data.DataLoader(
         test_dateset,
-        batch_size=args.batch_size,
-        sampler=RandomSampler(test_dateset)
+        batch_size=len(test_dateset),
+        # sampler=RandomSampler(test_dateset)
     )
-    return train_loader, test_loader, test_loader
+    return train_loader, val_loader, test_loader
 
 def qml_Dataloaders(args):
     train=pd.read_csv(f'benchmarks/{args.path}/{args.task_name}_train.csv',header=None)
+    val =pd.read_csv(f'benchmarks/{args.path}/{args.task_name}_val.csv',header=None)
     test=pd.read_csv(f'benchmarks/{args.path}/{args.task_name}_test.csv',header=None)
-    return create_dataloader(args, train, test)
+    return create_dataloader(args, train, val, test)
 
 def myBarsAndStripes(args,size):
     train=pd.read_csv(f'benchmarks/bars_and_stripes/bars_and_stripes_{size}_x_{size}_0.5noise_train.csv',header=None)

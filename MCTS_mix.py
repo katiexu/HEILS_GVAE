@@ -481,7 +481,8 @@ class MCTS:
     def Langevin_update(self, x, snr=None, n_steps=20, step_size=0.01): 
         z, logvar = self.ROOT.classifier.arch_to_z([x])
         x_valid_list = []
-
+        print(f"z max value: {torch.max(z).item()}")
+        print(f"z min value: {torch.min(z).item()}")
         # Compute scaling factor c
         decoder = self.ROOT.classifier.GVAE_model.decoder
         decoder.eval()
@@ -958,20 +959,20 @@ if __name__ == '__main__':
     task = args_c.task
     
     task = {
-    'task': 'QML_Linear_32d',
-    'n_qubits': 8,
+    'task': 'QML_Linear_64d',
+    'n_qubits': 16,
     'n_layers': 4,
-    'fold': 2,
+    'fold': 4,
     'option': 'mix_reg',
     'regular': True,
-    'num_processes': 1
+    'num_processes': 2
     }
 
     # task = {
-    # 'task': 'QML_Hidden_32d',
-    # 'n_qubits': 8,
+    # 'task': 'QML_Hidden_80d',
+    # 'n_qubits': 20,
     # 'n_layers': 4,
-    # 'fold': 2,
+    # 'fold': 5,
     # 'option': 'mix_reg',
     # 'regular': True,
     # 'num_processes': 2
@@ -1016,6 +1017,13 @@ if __name__ == '__main__':
 
     for iter in range(ITERATION, 30):
         jobs, designs, archs, nodes = agent.pre_search(iter)
+        # print(agent.weight['QuantumLayer.q_params_enta'][0])
+        weight_for_mp = {}
+        for k, v in agent.weight.items():
+            if isinstance(v, torch.Tensor):
+                weight_for_mp[k] = v.cpu().clone().detach()
+            else:
+                weight_for_mp[k] = v
         results = {}
         n_jobs = len(jobs)
         step = n_jobs // num_processes
@@ -1024,8 +1032,8 @@ if __name__ == '__main__':
             with Manager() as manager:
                 q = manager.Queue()
                 with mp.Pool(processes = num_processes) as pool:        
-                    pool.starmap(Scheme_mp, [(designs[i*step : (i+1)*step], jobs[i*step : (i+1)*step], task, agent.weight, i, q) for i in range(num_processes)])            
-                    pool.starmap(Scheme_mp, [(designs[n_jobs-i-1 : n_jobs-i], jobs[i*step : (i+1)*step], task, agent.weight, n_jobs-i-1, q) for i in range(res)])
+                    pool.starmap(Scheme_mp, [(designs[i*step : (i+1)*step], jobs[i*step : (i+1)*step], task, weight_for_mp, i, q) for i in range(num_processes)])            
+                    pool.starmap(Scheme_mp, [(designs[n_jobs-i-1 : n_jobs-i], jobs[i*step : (i+1)*step], task, weight_for_mp, n_jobs-i-1, q) for i in range(res)])
                 while not q.empty():
                     [i, acc] = q.get()
                     results[i] = acc

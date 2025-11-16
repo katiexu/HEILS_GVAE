@@ -149,29 +149,36 @@ def cir_to_matrix(x, y, arch_code, fold=1):
     arch = np.insert(single, [(2 * i) for i in range(1, layers+1)], entangle, axis=1)
     return arch.transpose(1, 0)
 
+def shift_ith_element_right(original_list, i):
+    """
+    对列表中每个item的第i个元素进行循环右移一位
+    
+    Args:
+        original_list: 原始列表，如 [[3, 0, 5], [4, 3, 6], [5, 1, 7], [1, 2, 8]]
+        i: 要循环右移的元素索引，如 i=1 表示第二个元素
+   
+    """   
+    ith_elements = [item[i] for item in original_list]    
+    # 循环右移一位：最后一个元素移到开头
+    shifted_ith = [ith_elements[-1]] + ith_elements[:-1]    
+    result = [item[:i] + [shifted_ith[idx]] + item[i+1:] for idx, item in enumerate(original_list)]
+    return result
+
 def qubit_fold(jobs, phase, fold=1):
     if fold > 1:
         job_list = []
-        for job in jobs:
-            q = job[0]
+        for job in jobs:            
             if phase == 0:
-                job_list.append([2*q] + job[1:])
-                job_list.append([2*q-1] + job[1:])
+                q = job[0]
+                job_list += [[fold*(q-1)+1+i] + job[1:] for i in range(0, fold)]
             else:
-                job_1 = [2*q]
-                job_2 = [2*q-1]
-                for k in job[1:]:
-                    if q < k:
-                        job_1.append(2*k)
-                        job_2.append(2*k-1)
-                    elif q > k:
-                        job_1.append(2*k-1)
-                        job_2.append(2*k)
-                    else:
-                        job_1.append(2*q)
-                        job_2.append(2*q-1)
-                job_list.append(job_1)
-                job_list.append(job_2)
+                job = [i-1 for i in job]
+                q = job[0]
+                indices = [i for i, x in enumerate(job) if x < q]
+                enta = [[fold*j+i+1 for j in job] for i in range(0,fold)]
+                for i in indices:
+                    enta = shift_ith_element_right(enta, i)
+                job_list += enta
     else:
         job_list = jobs
     return job_list
@@ -256,14 +263,12 @@ class TQLayer(tq.QuantumModule):
         super().__init__()
         self.args = arguments
         self.design = design
-        self.n_wires = self.args.n_qubits
-        
-        self.uploading = [tq.GeneralEncoder(self.data_uploading(i)) for i in range(10)]
+        self.n_wires = self.args.n_qubits        
+        self.uploading = [tq.GeneralEncoder(self.data_uploading(i)) for i in range(self.n_wires)]
 
         self.q_params_rot = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3))  # each U3 gate needs 3 parameters
         self.q_params_enta = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3))  # each CU3 gate needs 3 parameters
         
-               
         self.measure = tq.MeasureAll(tq.PauliZ)
 
     def data_uploading(self, qubit):
@@ -277,8 +282,9 @@ class TQLayer(tq.QuantumModule):
 
     def forward(self, x):
         bsz = x.shape[0]
-        kernel_size = self.args.kernel        
-        if not self.args.task.startswith('QML'):
+        kernel_size = self.args.kernel
+        task_name = self.args.task        
+        if not task_name.startswith('QML'):
             x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
             if kernel_size == 4:
                 x = x.view(bsz, 6, 6)
@@ -306,8 +312,11 @@ class TQLayer(tq.QuantumModule):
             else:   # data uploading: if self.design[i][0] == 'data'
                 j = int(self.design[i][1][0])
                 self.uploading[j](qdev, x[:,j])
+        out = self.measure(qdev)
+        if task_name.startswith('QML'):            
+            out = out[:, :2]    # only take the first two measurements for binary classification            
+        return out
 
-        return self.measure(qdev)
 
 class QNet(nn.Module):
     def __init__(self, arguments, design):

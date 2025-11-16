@@ -39,7 +39,7 @@ class FCN(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.flatten = nn.Flatten()
 
-        if arch[0] == 4:            
+        if arch[0] == 4 or 8:            
             self.fc11 = nn.Linear(1680, 64)   # MNIST-4
         elif arch[0] == 10:
             self.fc11 = nn.Linear(2128, 64)  # MNIST-10

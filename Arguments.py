@@ -6,7 +6,8 @@ class Arguments:
         task = kwargs.get('task', 'MNIST')
         fold = kwargs.get('fold', 1)
 
-        self.device     = 'cpu'        
+        # self.device     = 'cpu'
+        self.device     = 'cuda'       
         self.clr        = 0.005
         self.qlr        = 0.01
 
