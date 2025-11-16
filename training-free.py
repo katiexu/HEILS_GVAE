@@ -265,7 +265,7 @@ if __name__ == "__main__":
     args = Arguments(**task)
     arch_code = [task['n_qubits'], task['n_layers']]
 
-    output_csv = Path("results/top_express_scheme_eval.csv")
+    output_csv = Path(f"results/{task['task']}_training_free.csv")
     with output_csv.open("w", newline="") as csvfile:
         writer = csv.DictWriter(
             csvfile,
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     for rank, (single_rows, enta_rows, arch) in enumerate(top_express_designs, start=1):
         print(f"Evaluating design {rank}")
         design = single_enta_to_design(single_rows, enta_rows, arch_code, args.fold)
-        _, report = Scheme(design, task, 'init', 10, verbs=False)
+        _, report = Scheme(design, task, 'init', 30, verbs=False)
         test_acc = float(report.get('mae', 0.0))
 
         with output_csv.open("a", newline="") as csvfile:
