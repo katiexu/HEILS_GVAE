@@ -7,6 +7,18 @@ import torch.nn.functional as F
 from torchquantum.encoding import encoder_op_list_name_dict
 import numpy as np
 
+# Qiskit imports
+from qiskit import QuantumCircuit, transpile
+from qiskit.quantum_info import SparsePauliOp
+from qiskit.providers.fake_provider import GenericBackendV2
+from qiskit_aer.noise import NoiseModel
+from qiskit_aer.primitives import Estimator
+
+# PennyLane imports
+import pennylane as qml
+from Arguments import Arguments    # Only for setting qml.device()
+
+
 def gen_arch(change_code, base_code):        # start from 1, not 0
     # arch_code = base_code[1:] * base_code[0]
     n_qubits = base_code[0]    
@@ -318,12 +330,290 @@ class TQLayer(tq.QuantumModule):
         return out
 
 
+class QiskitLayer(nn.Module):
+    def __init__(self, arguments, design):
+        super().__init__()
+        self.args = arguments
+        self.design = design
+        self.num_classes = len(self.args.digits_of_interest)
+
+        # Trainable quantum circuit parameters
+        self.u3_params = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3), requires_grad=True)  # Each U3 gate needs 3 parameters.
+        self.cu3_params = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3), requires_grad=True) # Each C(U3) gate nees 3 parameters.
+
+        # Setup Qiskit noise backend
+        self.setup_qiskit_noise_backend()
+
+    def setup_qiskit_noise_backend(self):
+        """Setup Qiskit noise backend using GenericBackendV2"""
+        try:
+            # Use default settings to create GenericBackendV2, including basis_gates and coupling_map
+            self.backend = GenericBackendV2(num_qubits=self.args.n_qubits)
+
+            # Build noise model from backend properties
+            self.noise_model = NoiseModel.from_backend(self.backend)
+            print(f"✅ Successfully created noise model from Qiskit GenericBackendV2")
+            print(f"   Using default basis gates: {self.backend.operation_names}")
+        except Exception as e:
+            print(f"❌ Error loading noise model from Qiskit GenericBackendV2: {e}")
+
+
+    def create_quantum_circuit(self, x):
+        # Preprocess data: downsample and flatten
+        bsz = x.shape[0]
+        kernel_size = self.args.kernel
+        task_name = self.args.task
+        if not task_name.startswith('QML'):
+            x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+            if kernel_size == 4:
+                x = x.view(bsz, 6, 6)
+                tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+                x = tmp.reshape(bsz, -1, 10).transpose(1, 2)
+            else:
+                x = x.view(bsz, 4, 4).transpose(1, 2)
+        else:
+            x = x.view(bsz, self.n_wires, -1)
+
+        quantum_circuits = []
+        for batch in range(bsz):
+            qc = QuantumCircuit(self.args.n_qubits)
+
+            for i in range(len(self.design)):
+                if self.design[i][0] == 'U3':
+                    layer = self.design[i][2]
+                    qubit = self.design[i][1][0]
+                    theta = float(self.u3_params[layer, qubit, 0])
+                    phi = float(self.u3_params[layer, qubit, 1])
+                    lam = float(self.u3_params[layer, qubit, 2])
+                    qc.u(theta, phi, lam, qubit)
+                elif self.design[i][0] == 'C(U3)':
+                    layer = self.design[i][2]
+                    control_qubit = self.design[i][1][0]
+                    target_qubit = self.design[i][1][1]
+                    theta = float(self.cu3_params[layer, control_qubit, 0])
+                    phi = float(self.cu3_params[layer, control_qubit, 1])
+                    lam = float(self.cu3_params[layer, control_qubit, 2])
+                    qc.cu(theta, phi, lam, 0, control_qubit, target_qubit)
+                else:  # data uploading: if self.design[i][0] == 'data'
+                    j = int(self.design[i][1][0])
+                    qc.ry(float(x[batch][:, j][0].detach()), j)
+                    qc.rx(float(x[batch][:, j][1].detach()), j)
+                    qc.rz(float(x[batch][:, j][2].detach()), j)
+                    qc.ry(float(x[batch][:, j][3].detach()), j)
+
+            quantum_circuits.append(qc)
+
+        return quantum_circuits
+
+    def create_pauli_observables(self, physical_qubit_indices):
+        """
+        Create Pauli-Z observables based on physical qubit mapping
+        physical_qubit_indices = [0, 1, 3, 2] means:
+            - Logical qubit 0 maps to physical qubit 0 -> 'ZIII'
+            - Logical qubit 1 maps to physical qubit 1 -> 'IZII'
+            - Logical qubit 2 maps to physical qubit 3 -> 'IIIZ'
+            - Logical qubit 3 maps to physical qubit 2 -> 'IIZI'
+        """
+        observables = []
+
+        # Create observable for each physical qubit
+        for i, physical_qubit_idx in enumerate(physical_qubit_indices):
+            pauli_str = physical_qubit_idx * 'I' + 'Z' + (len(physical_qubit_indices) - 1 - physical_qubit_idx) * 'I'
+            observable = SparsePauliOp.from_list([(pauli_str, 1.0)])
+            observables.append(observable)
+
+        return observables
+
+    def run_qiskit_simulator(self, quantum_circuits, is_training=True):
+        backend_seeds = 170
+        # algorithm_globals.random_seed = backend_seeds
+        seed_transpiler = backend_seeds
+        shot = 6000
+
+        # Decide whether to apply noise based on training or inference phase
+        if is_training:
+            use_noise = self.args.use_noise_model_train
+            phase = "training"
+        else:
+            use_noise = self.args.use_noise_model_inference
+            phase = "inference"
+
+        if not hasattr(self, f'_printed_{phase}'):
+            print(f"Running quantum simulation for {phase} phase - Noise: {use_noise}")
+            setattr(self, f'_printed_{phase}', True)
+
+        if use_noise:
+            estimator = Estimator(
+                backend_options={
+                    'method': 'statevector',
+                    'device': self.args.backend_device,
+                    'noise_model': self.noise_model  # Add noise model when noise is enabled
+                },
+                run_options={
+                    'shots': shot,
+                    'seed': backend_seeds,
+                },
+                transpile_options={
+                    'seed_transpiler': seed_transpiler
+                }
+            )
+        else:
+            estimator = Estimator(
+                backend_options={
+                    'method': 'statevector',
+                    'device': self.args.backend_device,
+                    # Do not use noise model when noise is disabled
+                },
+                run_options={
+                    'shots': shot,
+                    'seed': backend_seeds,
+                },
+                transpile_options={
+                    'seed_transpiler': seed_transpiler
+                }
+            )
+
+        results = []
+        for i, qc in enumerate(quantum_circuits):
+            transpiled_qc = transpile(qc, backend=self.backend)
+
+            physical_qubit_indices = []
+            for q in range(transpiled_qc.num_qubits):
+                try:
+                    initial_layout = str(transpiled_qc.layout.initial_layout[q])
+                    index = int(initial_layout.split(', ')[-1].rstrip(')'))
+                    physical_qubit_indices.append(index)
+                except (KeyError, IndexError, ValueError, AttributeError) as e:
+                    print(f"Warning: Could not extract mapping for physical qubit {q}: {e}")
+
+            # Create Pauli-Z observables based on transpilation mapping (physical_qubit_indices)
+            observables = self.create_pauli_observables(physical_qubit_indices)
+
+            # Measure expectation values for each observable
+            expectation_values = []
+            for observable in observables:
+                try:
+                    job = estimator.run(transpiled_qc, observable)
+                    result = job.result()
+                    expectation_value = result.values[0]
+                    expectation_values.append(expectation_value)
+                except Exception as e:
+                    print(f"Error running quantum circuit {i} for observable: {e}")
+                    expectation_values.append(0.0)  # Default value when error occurs
+
+            # Convert expectation values to tensor
+            quantum_output = torch.tensor([expectation_values], dtype=torch.float32)
+            results.append(quantum_output)
+
+        # Stack results into shape [batch_size, num_classes]
+        if results:
+            quantum_results = torch.cat(results, dim=0)
+        else:
+            # Create default output if no results
+            quantum_results = torch.zeros((len(quantum_circuits), self.num_classes), dtype=torch.float32)
+
+        return quantum_results
+
+
+    def forward(self, x):
+        device = x.device
+
+        # Create quantum circuits
+        quantum_circuits = self.create_quantum_circuit(x)
+
+        # Run qiskit simulator with phase information
+        quantum_results = self.run_qiskit_simulator(quantum_circuits, is_training=self.training)
+        quantum_results = quantum_results.to(device)
+
+        # Ensure results require gradients
+        if not quantum_results.requires_grad:
+            quantum_results.requires_grad_(True)
+
+        output = quantum_results
+
+        return output
+
+
+dev = qml.device("lightning.qubit", wires=Arguments().n_qubits)
+
+@qml.qnode(dev, interface="torch", diff_method="adjoint")
+def quantum_net(self, x):
+    kernel_size = self.args.kernel
+    task_name = self.args.task
+    if not task_name.startswith('QML'):
+        x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+        if kernel_size == 4:
+            # x = x.view(bsz, 6, 6)
+            # tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+            # x = tmp.reshape(bsz, -1, 10).transpose(1, 2)
+            pass
+        else:
+            # x = x.view(bsz, 4, 4).transpose(1, 2)
+            x = x.view(4, 4).transpose(0, 1)
+    else:
+        # x = x.view(bsz, self.n_wires, -1)
+        pass
+
+    for i in range(len(self.design)):
+        if self.design[i][0] == 'U3':
+            layer = self.design[i][2]
+            qubit = self.design[i][1][0]
+            phi = self.u3_params[layer, qubit, 0]
+            theta = self.u3_params[layer, qubit, 1]
+            omega = self.u3_params[layer, qubit, 2]
+            qml.Rot(phi, theta, omega, wires=qubit)
+        elif self.design[i][0] == 'C(U3)':
+            layer = self.design[i][2]
+            control_qubit = self.design[i][1][0]
+            target_qubit = self.design[i][1][1]
+            phi = self.cu3_params[layer, control_qubit, 0]
+            theta = self.cu3_params[layer, control_qubit, 1]
+            omega = self.cu3_params[layer, control_qubit, 2]
+            qml.CRot(phi, theta, omega, wires=[control_qubit, target_qubit])
+        else:  # data uploading: if self.design[i][0] == 'data'
+            j = int(self.design[i][1][0])
+            qml.RY(x[:, j][0].detach(), wires=j)
+            qml.RX(x[:, j][1].detach(), wires=j)
+            qml.RZ(x[:, j][2].detach(), wires=j)
+            qml.RY(x[:, j][3].detach(), wires=j)
+
+    return [qml.expval(qml.PauliZ(i)) for i in range(self.args.n_qubits)]
+
+class PennylaneLayer(nn.Module):
+    def __init__(self, arguments, design):
+        super().__init__()
+        self.args = arguments
+        self.design = design
+        self.u3_params = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3), requires_grad=True)  # Each U3 gate needs 3 parameters
+        self.cu3_params = nn.Parameter(pi * torch.rand(self.args.n_layers, self.args.n_qubits, 3), requires_grad=True) # Each CU3 gate needs 3 parameters
+
+    def forward(self, x):
+        output_list = []
+        for batch in range(self.args.batch_size):
+            x_batch = x[batch]
+            output = quantum_net(self, x_batch)
+            q_out = torch.stack([output[i] for i in range(len(output))]).float()
+            output_list.append(q_out)
+        outputs = torch.stack(output_list)
+
+        return outputs
+
+
+
 class QNet(nn.Module):
     def __init__(self, arguments, design):
         super(QNet, self).__init__()
         self.args = arguments
         self.design = design
-        self.QuantumLayer = TQLayer(self.args, self.design)
+        if arguments.backend == 'tq':
+            print("Run with TorchQuantum backend.")
+            self.QuantumLayer = TQLayer(self.args, self.design)
+        elif arguments.backend == 'qi':
+            print("Run with Qiskit quantum backend.")
+            self.QuantumLayer = QiskitLayer(self.args, self.design)
+        else:   # PennyLane or others
+            print("Run with PennyLane quantum backend or others.")
+            self.QuantumLayer = PennylaneLayer(self.args, self.design)
 
     def forward(self, x_image, n_qubits, task_name):
         # exp_val = self.QuantumLayer(x_image, n_qubits, task_name)

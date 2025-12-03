@@ -11,7 +11,7 @@ from FusionModel import translator, single_enta_to_design
 
 from Arguments import Arguments
 import random
-
+from tqdm import tqdm
 
 
 
@@ -36,7 +36,8 @@ def display(metrics):
     
 def train(model, data_loader, optimizer, criterion, args):
     model.train()
-    for feed_dict in data_loader:
+    # for feed_dict in data_loader:
+    for feed_dict in tqdm(data_loader, desc="Training"):
         images = feed_dict['image'].to(args.device)
         targets = feed_dict['digit'].to(args.device)    
         optimizer.zero_grad()
@@ -51,7 +52,8 @@ def test(model, data_loader, criterion, args):
     target_all = torch.Tensor().to(args.device)
     output_all = torch.Tensor().to(args.device)
     with torch.no_grad():
-        for feed_dict in data_loader:
+        # for feed_dict in data_loader:
+        for feed_dict in tqdm(data_loader, desc="Testing"):
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
             output = model(images, args.n_qubits, args.task)
@@ -74,7 +76,8 @@ def evaluate(model, data_loader, args):
     metrics = {}
     
     with torch.no_grad():
-        for feed_dict in data_loader:
+        # for feed_dict in data_loader:
+        for feed_dict in tqdm(data_loader, desc="Evaluating"):
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
             output = model(images, args.n_qubits, args.task)
@@ -184,31 +187,31 @@ def pretrain(design, task, weight):
 
 
 if __name__ == '__main__':
-    task = {
-    'task': 'MNIST_10',
-    'option': 'mix_reg',
-    'n_qubits': 10,
-    'n_layers': 4,
-    'fold': 2
-    }
-
     # task = {
-    # 'task': 'MNIST_4',
+    # 'task': 'MNIST_10',
     # 'option': 'mix_reg',
-    # 'n_qubits': 4,
+    # 'n_qubits': 10,
     # 'n_layers': 4,
-    # 'fold': 1
+    # 'fold': 2
     # }
 
     task = {
-    'task': 'QML_Hidden_80d',
-    'n_qubits': 20,
-    'n_layers': 4,
-    'fold': 5,
+    'task': 'MNIST_4',
     'option': 'mix_reg',
-    'regular': True,
-    'num_processes': 2
+    'n_qubits': 4,
+    'n_layers': 4,
+    'fold': 1,
     }
+
+    # task = {
+    # 'task': 'QML_Hidden_80d',
+    # 'n_qubits': 20,
+    # 'n_layers': 4,
+    # 'fold': 5,
+    # 'option': 'mix_reg',
+    # 'regular': True,
+    # 'num_processes': 2
+    # }
     
     arch_code = [task['n_qubits'], task['n_layers']]
     args = Arguments(**task)

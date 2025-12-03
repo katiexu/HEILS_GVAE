@@ -6,6 +6,11 @@ class Arguments:
         task = kwargs.get('task', 'MNIST')
         fold = kwargs.get('fold', 1)
 
+        # Qiskit arguments
+        self.use_noise_model_train = False
+        self.use_noise_model_inference = True
+        self.backend_device = 'CPU'
+
         # self.device     = 'cpu'
         self.device     = 'cuda'       
         self.clr        = 0.005
@@ -16,13 +21,13 @@ class Arguments:
         self.task      = task
         self.n_qubits   = n_qubits        
         self.epochs     = 1
-        self.batch_size = 256        
+        self.batch_size = 256
         self.sampling = 5
 
         self.n_layers = n_layers      
         self.exploration = [0.001, 0.002, 0.003]
         
-        self.backend    = 'tq'        
+        self.backend    = 'qml'      # 'tq' for TorchQuantum; 'qi' for Qiskit Aer Simulator; 'qml' for PennyLane
         self.digits_of_interest = [0, 1, 2, 3]
         self.train_valid_split_ratio = [0.95, 0.05]
         self.center_crop = 24
