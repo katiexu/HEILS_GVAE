@@ -589,7 +589,7 @@ class PennylaneLayer(nn.Module):
 
     def forward(self, x):
         output_list = []
-        for batch in range(self.args.batch_size):
+        for batch in range(x.size(0)):  # Use actual batch size
             x_batch = x[batch]
             output = quantum_net(self, x_batch)
             q_out = torch.stack([output[i] for i in range(len(output))]).float()
@@ -620,3 +620,4 @@ class QNet(nn.Module):
         exp_val = self.QuantumLayer(x_image)
         output = F.log_softmax(exp_val, dim=1)        
         return output
+
