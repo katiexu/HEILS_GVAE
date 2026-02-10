@@ -12,7 +12,7 @@ class Arguments:
         self.backend_device = 'CPU'
 
         # self.device     = 'cpu'
-        self.device     = 'cuda'       
+        self.device     = 'cuda'
         self.clr        = 0.005
         self.qlr        = 0.01
 
@@ -27,7 +27,7 @@ class Arguments:
         self.n_layers = n_layers      
         self.exploration = [0.001, 0.002, 0.003]
         
-        self.backend    = 'qml'      # 'tq' for TorchQuantum; 'qi' for Qiskit Aer Simulator; 'qml' for PennyLane
+        self.backend    = 'qi'      # 'tq' for TorchQuantum; 'qi' for Qiskit Aer Simulator; 'qml' for PennyLane
         self.digits_of_interest = [0, 1, 2, 3]
         self.train_valid_split_ratio = [0.95, 0.05]
         self.center_crop = 24
@@ -53,7 +53,7 @@ class Arguments:
             self.base_code = [self.n_layers, 2, 3, 4, 1]
             self.exploration = [0.001, 0.002, 0.003]
 
-            self.backend    = 'tq'            
+            self.backend    = 'tq'
             self.digits_of_interest = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
             self.file_single = 'search_space/search_space_mnist_half_single'
             self.file_enta   = 'search_space/search_space_mnist_half_enta'
